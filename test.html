@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en-us">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Navisens Web Core Demo</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/5.0.0-alpha1/css/bootstrap.min.css" integrity="sha384-r4NyP46KrjDleawBgD5tp8Y7UzmLA05oM1iAEQ17CSuDqnUK2+k9luXQOfXJCJ4I" crossorigin="anonymous">
+    <style>
+        .emscripten {
+            padding-right: 0;
+            margin-left: auto;
+            margin-right: auto;
+            display: block;
+        }
+        
+        textarea.emscripten {
+            font-family: monospace;
+            width: 80%;
+        }
+        
+        div.emscripten {
+            text-align: center;
+        }
+        
+        div.emscripten_border {
+            border: 1px solid black;
+        }
+        /* the canvas *must not* have any border or padding, or mouse coords will be wrong */
+        
+        canvas.emscripten {
+            border: 0px none;
+            background-color: black;
+        }
+        
+        .spinner {
+            height: 50px;
+            width: 50px;
+            margin: 0px auto;
+            -webkit-animation: rotation .8s linear infinite;
+            -moz-animation: rotation .8s linear infinite;
+            -o-animation: rotation .8s linear infinite;
+            animation: rotation 0.8s linear infinite;
+            border-left: 10px solid rgb(200, 200, 200);
+            border-right: 10px solid rgb(200, 200, 200);
+            border-bottom: 10px solid rgb(200, 200, 200);
+            border-top: 10px solid rgb(204, 84, 92);
+            border-radius: 100%;
+            background-color: rgb(255, 255, 255);
+        }
+        
+        @-webkit-keyframes rotation {
+            from {
+                -webkit-transform: rotate(0deg);
+            }
+            to {
+                -webkit-transform: rotate(360deg);
+            }
+        }
+        
+        @-moz-keyframes rotation {
+            from {
+                -moz-transform: rotate(0deg);
+            }
+            to {
+                -moz-transform: rotate(360deg);
+            }
+        }
+        
+        @-o-keyframes rotation {
+            from {
+                -o-transform: rotate(0deg);
+            }
+            to {
+                -o-transform: rotate(360deg);
+            }
+        }
+        
+        @keyframes rotation {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <hr/>
+    <figure style="overflow:visible;" id="spinner">
+        <div class="spinner"></div>
+        <center style="margin-top:0.5em"><strong>Navisens Web Core</strong></center>
+    </figure>
+    <div class="emscripten" id="status">Downloading Core Module...</div>
+    <div class="emscripten">
+        <progress value="0" max="100" id="progress" hidden=1></progress>
+    </div>
+    <div class="emscripten_border">
+        <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+    </div>
+    <!-- Load d3.js -->
+    <script src="https://d3js.org/d3.v4.js"></script>
+
+    <!-- div where the graph will take place -->
+    <div id="cartesian"></div>
+    <textarea class="emscripten" id="output" rows="8"></textarea>
+
+    <hr>
+    <script type='text/javascript'>
+        var statusElement = document.getElementById('status');
+        var progressElement = document.getElementById('progress');
+        var spinnerElement = document.getElementById('spinner');
+
+        function testCall(i, str) {
+            console.log("TEST CALL: " + i + "  " + str);
+        }
+
+
+        var navisensCoreIsReady = false;
+
+        // set the dimensions and margins of the graph
+        var margin = {
+                top: 10,
+                right: 30,
+                bottom: 30,
+                left: 60
+            },
+            width = document.body.clientWidth - margin.left - margin.right,
+            height = document.body.clientWidth - margin.top - margin.bottom;
+        console.log("cart width: " + width)
+        console.log("cart height: " + height)
+        var data = [];
+
+        // append the svg object to the body of the page
+        var svg = d3.select("#cartesian")
+            .append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+            .append("g")
+            .attr("transform",
+                "translate(" + margin.left + "," + margin.top + ")");
+
+        // Add X axis
+        var x_axis = d3.scaleLinear()
+            .domain([0, 10])
+            .range([0, width]);
+        svg.append("g")
+            .attr("transform", "translate(0," + height + ")")
+            .call(d3.axisBottom(x_axis));
+
+        // Add Y axis
+        var y_axis = d3.scaleLinear()
+            .domain([0, 10])
+            .range([height, 0]);
+        svg.append("g")
+            .call(d3.axisLeft(y_axis));
+
+
+        var padding = 2.0 // percentage of canvas used for padding
+        var canvas_height = document.getElementById("canvas").clientHeight
+        var canvas_width = document.getElementById("canvas").clientWidth
+        console.log("canvas_height: " + canvas_height)
+        console.log("canvas_width: " + canvas_width)
+        var max_x, min_x, max_y, min_y, max_axis, min_axis
+
+        function updateBounds(x, y) {
+            if (max_x === undefined || max_x < x) {
+                max_x = x
+            }
+            if (min_x === undefined || min_x > x) {
+                min_x = x
+            }
+            if (max_y === undefined || max_y < y) {
+                max_y = y
+            }
+            if (min_y === undefined || min_y > y) {
+                min_y = y
+            }
+            max_axis = max_x > max_y ? max_x : max_y
+            min_axis = min_x < min_y ? min_x : min_y
+        }
+
+        function updateCartesian(data_points) {
+            // console.log("data_points: " + data_points.length)
+            svg.selectAll("g").remove();
+
+            // Add X axis
+            var x_axis = d3.scaleLinear()
+                .domain([min_axis, max_axis])
+                .range([0, width]);
+            svg.append("g")
+                .attr("transform", "translate(0," + height + ")")
+                .call(d3.axisBottom(x_axis));
+
+            // Add Y axis
+            var y_axis = d3.scaleLinear()
+                .domain([min_axis, max_axis])
+                .range([height, 0]);
+            svg.append("g")
+                .call(d3.axisLeft(y_axis));
+
+
+            // Add dots
+            svg.append('g')
+                .selectAll("dot")
+                .data(data_points)
+                .enter()
+                .append("circle")
+                .attr("cx", function(d) {
+                    return x_axis(d.x_axis);
+                })
+                .attr("cy", function(d) {
+                    return y_axis(d.y_axis);
+                })
+                .attr("r", 1.5)
+                .style("fill", "#CC545C")
+        }
+
+        function reportStatus(statusCode, description) {
+            if (statusCode != 0) {
+                alert(description);
+            }
+        }
+
+        var last_location
+
+        function receive(x, y, h, t, motion) {
+
+            document.getElementById("estPosX").innerHTML = x.toFixed(5);
+            document.getElementById("estPosY").innerHTML = y.toFixed(5);
+            document.getElementById("estPosH").innerHTML = h.toFixed(5);
+            document.getElementById("estPosT").innerHTML = t.toFixed(5);
+            document.getElementById("estPosM").innerHTML = motion;
+
+            updateBounds(x, y)
+            var location = new Object();
+            location.x_axis = x;
+            location.y_axis = y;
+
+
+            if (last_location != undefined) {
+                var x_diff = Math.abs(x - last_location.x_axis);
+                var y_diff = Math.abs(y - last_location.y_axis);
+                // console.log("x_diff: " + x_diff + " y_diff: " + y_diff)
+                if (y_diff > 0.15 || x_diff > 0.15) {
+                    data.push(location)
+                    updateCartesian(data)
+                    last_location = location
+                }
+            } else {
+                data.push(location)
+                updateCartesian(data)
+                last_location = location
+            }
+
+        }
+
+        var Module = {
+            preRun: [],
+            postRun: [],
+            onRuntimeInitialized: function() {
+                navisensCoreIsReady = true;
+                console.log("onRuntimeInitialized");
+            },
+            print: (function() {
+                var element = document.getElementById('output');
+                if (element) element.value = ''; // clear browser cache
+                return function(text) {
+                    if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                    console.log(text);
+                    if (element) {
+                        element.value += text + "\n";
+                        element.scrollTop = element.scrollHeight; // focus on bottom
+                    }
+                };
+            })(),
+            printErr: function(text) {
+                if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                if (0) { // XXX disabled for safety typeof dump == 'function') {
+                    dump(text + '\n'); // fast, straight to the real console
+                } else {
+                    console.error(text);
+                }
+            },
+            canvas: (function() {
+                var canvas = document.getElementById('canvas');
+
+                // As a default initial behavior, pop up an alert when webgl context is lost. To make your
+                // application robust, you may want to override this behavior before shipping!
+                // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
+                canvas.addEventListener("webglcontextlost", function(e) {
+                    alert('WebGL context lost. You will need to reload the page.');
+                    e.preventDefault();
+                }, false);
+
+                return canvas;
+            })(),
+            setStatus: function(text) {
+                if (!Module.setStatus.last) Module.setStatus.last = {
+                    time: Date.now(),
+                    text: ''
+                };
+                if (text === Module.setStatus.text) return;
+                var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+                var now = Date.now();
+                if (m && now - Date.now() < 30) return; // if this is a progress update, skip it if too soon
+                if (m) {
+                    text = m[1];
+                    progressElement.value = parseInt(m[2]) * 100;
+                    progressElement.max = parseInt(m[4]) * 100;
+                    progressElement.hidden = false;
+                    spinnerElement.hidden = false;
+                } else {
+                    progressElement.value = null;
+                    progressElement.max = null;
+                    progressElement.hidden = true;
+                    if (!text) spinnerElement.hidden = true;
+                }
+                statusElement.innerHTML = text;
+            },
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                Module.setStatus(left ? 'Preparing Core... (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+            }
+        };
+        Module.setStatus('Downloading Core Module...');
+        window.onerror = function() {
+            Module.setStatus('Exception thrown, see JavaScript console');
+            spinnerElement.style.display = 'none';
+            Module.setStatus = function(text) {
+                if (text) Module.printErr('[post-exception status] ' + text);
+            };
+        };
+        let db;
+    </script>
+    <div class="container-fluid">
+        <div class="container-fluid">
+
+            <button type="button" class="btn btn-success btn-lg" id="startcore">Start</button>
+            <button type="button" class="btn btn-danger btn-lg" id="stopcore">Stop</button>
+        </div>
+        <script type='text/javascript'>
+            document.getElementById('stopcore').addEventListener('click', function() {
+                var result = Module['stop'](); // arguments
+            });
+
+
+            document.getElementById('startcore').addEventListener('click', function() {
+                if (navisensCoreIsReady) {
+                    console.log("about to show demo intro")
+                    if (!DeviceMotionEvent) {
+                        console.log("DEVICE MOTION EVENT DOESNT EXIST")
+                        return;
+                    }
+                    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                        // iOS 13+
+                        console.log("REQUESTING PERMISSIONS (or trying too)")
+                        DeviceMotionEvent.requestPermission()
+                            .then(response => {
+                                if (response == 'granted') {
+                                    console.log("Request for Device Motion was granted")
+                                    Module.start() // start core
+                                } else {
+                                    console.log("Request for Device Motion was denied")
+                                }
+                            })
+                            .catch(console.error)
+
+                    } else {
+                        console.log("DeviceMotionEvent.requestPermission does not exist. Starting without")
+                        Module.start() // start core with no verification
+
+                    }
+
+                } else {
+                    alert("navisenscore is not ready yet.")
+                }
+            });
+        </script>
+        <script async type="text/javascript" src="https://navisens.com/webcore.js"></script>
+        <br/>
+
+        <div class="container">
+            <div class="row">
+                <div class="col-lg text-center">
+                    <h3>Estimation</h3>
+                </div>
+            </div>
+            <div class="row">
+                <table class="table table-striped">
+                    <tr>
+                        <td> X </td>
+                        <td id="estPosX"></td>
+                    </tr>
+                    <tr>
+                        <td> Y </td>
+                        <td id="estPosY"></td>
+                    </tr>
+                    <tr>
+                        <td> Height </td>
+                        <td id="estPosH"></td>
+                    </tr>
+                    <tr>
+                        <td> Time </td>
+                        <td id="estPosT"></td>
+                    </tr>
+                    <tr>
+                        <td> Motion </td>
+                        <td id="estPosM"></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <br/>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/5.0.0-alpha1/js/bootstrap.min.js" integrity="sha384-oesi62hOLfzrys4LxRF63OJCXdXDipiYWBnvTl9Y9/TRlw5xlKIEHpNyvvDShgf/" crossorigin="anonymous"></script>
+</body>
+
+</html>
